@@ -47,6 +47,7 @@ type Server struct {
 	KubeConfigMode           string
 	HelmJobImage             string
 	TLSSan                   cli.StringSlice
+	TLSSanSecurity           bool
 	BindAddress              string
 	EnablePProf              bool
 	ExtraAPIArgs             cli.StringSlice
@@ -59,11 +60,11 @@ type Server struct {
 	DatastoreCAFile          string
 	DatastoreCertFile        string
 	DatastoreKeyFile         string
+	KineTLS                  bool
 	AdvertiseIP              string
 	AdvertisePort            int
 	DisableScheduler         bool
 	ServerURL                string
-	MultiClusterCIDR         bool
 	FlannelBackend           string
 	FlannelIPv6Masq          bool
 	FlannelExternalIP        bool
@@ -76,6 +77,7 @@ type Server struct {
 	DisableAPIServer         bool
 	DisableControllerManager bool
 	DisableETCD              bool
+	EmbeddedRegistry         bool
 	ClusterInit              bool
 	ClusterReset             bool
 	ClusterResetRestorePath  string
@@ -189,7 +191,7 @@ var ServerFlags = []cli.Flag{
 	},
 	&cli.StringFlag{
 		Name:        "advertise-address",
-		Usage:       "(listener) IPv4 address that apiserver uses to advertise to members of the cluster (default: node-external-ip/node-ip)",
+		Usage:       "(listener) IPv4/IPv6 address that apiserver uses to advertise to members of the cluster (default: node-external-ip/node-ip)",
 		Destination: &ServerConfig.AdvertiseIP,
 	},
 	&cli.IntFlag{
@@ -202,6 +204,11 @@ var ServerFlags = []cli.Flag{
 		Usage: "(listener) Add additional hostnames or IPv4/IPv6 addresses as Subject Alternative Names on the server TLS cert",
 		Value: &ServerConfig.TLSSan,
 	},
+	&cli.BoolTFlag{
+		Name:        "tls-san-security",
+		Usage:       "(listener) Protect the server TLS cert by refusing to add Subject Alternative Names not associated with the kubernetes apiserver service, server nodes, or values of the tls-san option (default: true)",
+		Destination: &ServerConfig.TLSSanSecurity,
+	},
 	DataDirFlag,
 	ClusterCIDR,
 	ServiceCIDR,
@@ -210,14 +217,9 @@ var ServerFlags = []cli.Flag{
 	ClusterDomain,
 	&cli.StringFlag{
 		Name:        "flannel-backend",
-		Usage:       "(networking) Backend (valid values: 'none', 'vxlan', 'ipsec' (deprecated), 'host-gw', 'wireguard-native'",
+		Usage:       "(networking) Backend (valid values: 'none', 'vxlan', 'host-gw', 'wireguard-native'",
 		Destination: &ServerConfig.FlannelBackend,
 		Value:       "vxlan",
-	},
-	&cli.BoolFlag{
-		Name:        "multi-cluster-cidr",
-		Usage:       "(experimental/networking) Enable multiClusterCIDR",
-		Destination: &ServerConfig.MultiClusterCIDR,
 	},
 	&cli.BoolFlag{
 		Name:        "flannel-ipv6-masq",
@@ -308,6 +310,12 @@ var ServerFlags = []cli.Flag{
 		Name:  "kube-cloud-controller-manager-arg",
 		Usage: "(flags) Customized flag for kube-cloud-controller-manager process",
 		Value: &ServerConfig.ExtraCloudControllerArgs,
+	},
+	&cli.BoolFlag{
+		Name:        "kine-tls",
+		Usage:       "(experimental/db) Enable TLS on the kine etcd server socket",
+		Destination: &ServerConfig.KineTLS,
+		Hidden:      true,
 	},
 	&cli.StringFlag{
 		Name:        "datastore-endpoint",
@@ -483,6 +491,11 @@ var ServerFlags = []cli.Flag{
 		Usage:       "(experimental/components) Disable running etcd",
 		Destination: &ServerConfig.DisableETCD,
 	},
+	&cli.BoolFlag{
+		Name:        "embedded-registry",
+		Usage:       "(experimental/components) Enable embedded distributed container registry; requires use of embedded containerd",
+		Destination: &ServerConfig.EmbeddedRegistry,
+	},
 	NodeNameFlag,
 	WithNodeIDFlag,
 	NodeLabels,
@@ -491,6 +504,9 @@ var ServerFlags = []cli.Flag{
 	ImageCredProvConfigFlag,
 	DockerFlag,
 	CRIEndpointFlag,
+	DefaultRuntimeFlag,
+	ImageServiceEndpointFlag,
+	DisableDefaultRegistryEndpointFlag,
 	PauseImageFlag,
 	SnapshotterFlag,
 	PrivateRegistryFlag,

@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,14 +9,15 @@ import (
 	testutil "github.com/k3s-io/k3s/tests/integration"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-
 	. "github.com/onsi/gomega/gstruct"
 	v1 "k8s.io/api/core/v1"
 )
 
-var startupServer *testutil.K3sServer
-var startupServerArgs = []string{}
-var testLock int
+var (
+	startupServer     *testutil.K3sServer
+	startupServerArgs = []string{}
+	testLock          int
+)
 
 var _ = BeforeSuite(func() {
 	if testutil.IsExistingServer() {
@@ -27,7 +29,6 @@ var _ = BeforeSuite(func() {
 })
 
 var _ = Describe("startup tests", Ordered, func() {
-
 	When("a default server is created", func() {
 		It("is created with no arguments", func() {
 			var err error
@@ -38,6 +39,59 @@ var _ = Describe("startup tests", Ordered, func() {
 			Eventually(func() error {
 				return testutil.K3sDefaultDeployments()
 			}, "120s", "5s").Should(Succeed())
+		})
+		It("has kine without tls", func() {
+			Eventually(func() error {
+				match, err := testutil.SearchK3sLog(startupServer, "Kine available at unix://kine.sock")
+				if err != nil {
+					return err
+				}
+				if match {
+					return nil
+				}
+				return errors.New("error finding kine sock")
+			}, "30s", "2s").Should(Succeed())
+		})
+		It("does not use kine with tls after bootstrap", func() {
+			Eventually(func() error {
+				match, err := testutil.SearchK3sLog(startupServer, "Kine available at unixs://kine.sock")
+				if err != nil {
+					return err
+				}
+				if match {
+					return errors.New("Kine with tls when the kine-tls is not set")
+				}
+				return nil
+			}, "30s", "2s").Should(Succeed())
+		})
+		It("dies cleanly", func() {
+			Expect(testutil.K3sKillServer(startupServer)).To(Succeed())
+			Expect(testutil.K3sCleanup(-1, "")).To(Succeed())
+		})
+	})
+	When("a server with kine-tls is created", func() {
+		It("is created with kine-tls", func() {
+			var err error
+			startupServerArgs = []string{"--kine-tls"}
+			startupServer, err = testutil.K3sStartServer(startupServerArgs...)
+			Expect(err).ToNot(HaveOccurred())
+		})
+		It("has the default pods deployed", func() {
+			Eventually(func() error {
+				return testutil.K3sDefaultDeployments()
+			}, "120s", "5s").Should(Succeed())
+		})
+		It("set kine to use tls", func() {
+			Eventually(func() error {
+				match, err := testutil.SearchK3sLog(startupServer, "Kine available at unixs://kine.sock")
+				if err != nil {
+					return err
+				}
+				if match {
+					return nil
+				}
+				return errors.New("error finding unixs://kine.sock")
+			}, "30s", "2s").Should(Succeed())
 		})
 		It("dies cleanly", func() {
 			Expect(testutil.K3sKillServer(startupServer)).To(Succeed())
@@ -85,12 +139,18 @@ var _ = Describe("startup tests", Ordered, func() {
 		It("creates dummy interfaces", func() {
 			Expect(testutil.RunCommand("ip link add dummy2 type dummy")).To(Equal(""))
 			Expect(testutil.RunCommand("ip link add dummy3 type dummy")).To(Equal(""))
+			Expect(testutil.RunCommand("ip link add dummy4 type dummy")).To(Equal(""))
 			Expect(testutil.RunCommand("ip addr add 11.22.33.44/24 dev dummy2")).To(Equal(""))
 			Expect(testutil.RunCommand("ip addr add 55.66.77.88/24 dev dummy3")).To(Equal(""))
+			Expect(testutil.RunCommand("ip addr add 11.11.22.22/24 dev dummy4")).To(Equal(""))
 		})
 		It("is created with node-ip arguments", func() {
 			var err error
-			startupServerArgs = []string{"--node-ip", "11.22.33.44", "--node-external-ip", "55.66.77.88"}
+			startupServerArgs = []string{
+				"--node-ip", "11.22.33.44",
+				"--node-external-ip", "55.66.77.88",
+				"--advertise-address", "11.11.22.22",
+			}
 			startupServer, err = testutil.K3sStartServer(startupServerArgs...)
 			Expect(err).ToNot(HaveOccurred())
 		})
@@ -110,13 +170,20 @@ var _ = Describe("startup tests", Ordered, func() {
 				{
 					Type:    "ExternalIP",
 					Address: "55.66.77.88",
-				}}))
+				},
+			}))
+		})
+		It("get the kubectl and see if has the right advertise ip", func() {
+			apiInfo, err := testutil.GetEndpointsAddresses()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(apiInfo).To(ContainSubstring("11.11.22.22"))
 		})
 		It("dies cleanly", func() {
 			Expect(testutil.K3sKillServer(startupServer)).To(Succeed())
 			Expect(testutil.K3sCleanup(-1, "")).To(Succeed())
 			Expect(testutil.RunCommand("ip link del dummy2")).To(Equal(""))
 			Expect(testutil.RunCommand("ip link del dummy3")).To(Equal(""))
+			Expect(testutil.RunCommand("ip link del dummy4")).To(Equal(""))
 		})
 	})
 	When("a server with different data-dir is created", func() {
@@ -250,6 +317,55 @@ var _ = Describe("startup tests", Ordered, func() {
 			Expect(testutil.K3sCleanup(-1, "")).To(Succeed())
 		})
 	})
+	When("a server with datastore-endpoint and disable apiserver is created", func() {
+		It("is created with datastore-endpoint and disable apiserver flags", func() {
+			var err error
+			startupServerArgs = []string{"--datastore-endpoint", "test", "--disable-apiserver"}
+			startupServer, err = testutil.K3sStartServer(startupServerArgs...)
+			Expect(err).NotTo(HaveOccurred())
+		})
+		It("search for the error log", func() {
+			Eventually(func() error {
+				match, err := testutil.SearchK3sLog(startupServer, "invalid flag use; cannot use --disable-apiserver with --datastore-endpoint")
+				if err != nil {
+					return err
+				}
+				if match {
+					return nil
+				}
+				return errors.New("nor found error when --datastore-endpoint and --disable-apiserver are used together")
+			}, "30s", "2s").Should(Succeed())
+		})
+		It("cleans up", func() {
+			Expect(testutil.K3sKillServer(startupServer)).To(Succeed())
+			Expect(testutil.K3sCleanup(-1, "")).To(Succeed())
+		})
+	})
+	When("a server with datastore-endpoint and disable etcd is created", func() {
+		It("is created with datastore-endpoint and disable etcd flags", func() {
+			var err error
+			startupServerArgs = []string{"--datastore-endpoint", "test", "--disable-etcd", "-s", "https://192.168.1.12:6443"}
+			startupServer, err = testutil.K3sStartServer(startupServerArgs...)
+			Expect(err).NotTo(HaveOccurred())
+		})
+		It("search for the error log", func() {
+			Eventually(func() error {
+				match, err := testutil.SearchK3sLog(startupServer, "invalid flag use; cannot use --disable-etcd with --datastore-endpoint")
+				if err != nil {
+					return err
+				}
+				if match {
+					return nil
+				}
+				return errors.New("not found error when --datastore-endpoint and --disable-etcd are used together")
+			}, "30s", "2s").Should(Succeed())
+		})
+		It("cleans up", func() {
+			Expect(testutil.K3sKillServer(startupServer)).To(Succeed())
+			Expect(testutil.K3sCleanup(-1, "")).To(Succeed())
+		})
+	})
+
 })
 
 var failed bool

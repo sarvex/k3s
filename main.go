@@ -45,12 +45,12 @@ func main() {
 			secretsencrypt.Prepare,
 			secretsencrypt.Rotate,
 			secretsencrypt.Reencrypt,
+			secretsencrypt.RotateKeys,
 		),
-		cmds.NewCertCommand(
-			cmds.NewCertSubcommands(
-				cert.Rotate,
-				cert.RotateCA,
-			),
+		cmds.NewCertCommands(
+			cert.Check,
+			cert.Rotate,
+			cert.RotateCA,
 		),
 		cmds.NewCompletionCommand(completion.Run),
 	}

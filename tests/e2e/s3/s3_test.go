@@ -13,14 +13,13 @@ import (
 )
 
 // Valid nodeOS:
-// generic/ubuntu2004, generic/centos7, generic/rocky8,
+// generic/ubuntu2310, generic/centos7, generic/rocky8,
 // opensuse/Leap-15.3.x86_64
-var nodeOS = flag.String("nodeOS", "generic/ubuntu2004", "VM operating system")
+var nodeOS = flag.String("nodeOS", "generic/ubuntu2310", "VM operating system")
 var ci = flag.Bool("ci", false, "running on CI")
 var local = flag.Bool("local", false, "deploy a locally built K3s binary")
 
 // Environment Variables Info:
-// E2E_EXTERNAL_DB: mysql, postgres, etcd (default: etcd)
 // E2E_RELEASE_VERSION=v1.23.1+k3s2 (default: latest commit from master)
 // E2E_REGISTRY: true/false (default: false)
 
@@ -83,17 +82,56 @@ var _ = Describe("Verify Create", Ordered, func() {
 		})
 
 		It("ensures s3 mock is working", func() {
-			a, err := e2e.RunCmdOnNode("sudo docker ps -a | grep mock\n", serverNodeNames[0])
-			fmt.Println(a)
+			res, err := e2e.RunCmdOnNode("docker ps -a | grep mock\n", serverNodeNames[0])
+			fmt.Println(res)
 			Expect(err).NotTo(HaveOccurred())
 		})
 		It("save s3 snapshot", func() {
-			a, err := e2e.RunCmdOnNode("sudo k3s etcd-snapshot save", serverNodeNames[0])
+			res, err := e2e.RunCmdOnNode("k3s etcd-snapshot save", serverNodeNames[0])
 			Expect(err).NotTo(HaveOccurred())
-			Expect(strings.Contains(a, "S3 bucket test exists")).Should(Equal(true))
-			Expect(strings.Contains(a, "Uploading snapshot")).Should(Equal(true))
-			Expect(strings.Contains(a, "S3 upload complete for")).Should(Equal(true))
-
+			Expect(res).To(ContainSubstring("Snapshot on-demand-server-0"))
+		})
+		It("lists saved s3 snapshot", func() {
+			res, err := e2e.RunCmdOnNode("k3s etcd-snapshot list", serverNodeNames[0])
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res).To(ContainSubstring("file:///var/lib/rancher/k3s/server/db/snapshots/on-demand-server-0"))
+			Expect(res).To(ContainSubstring("s3://test-bucket/test-folder/on-demand-server-0"))
+		})
+		It("save 3 more s3 snapshots", func() {
+			for _, i := range []string{"1", "2", "3"} {
+				res, err := e2e.RunCmdOnNode("k3s etcd-snapshot save --name special-"+i, serverNodeNames[0])
+				Expect(err).NotTo(HaveOccurred())
+				Expect(res).To(ContainSubstring("Snapshot special-" + i + "-server-0"))
+			}
+		})
+		It("lists saved s3 snapshot", func() {
+			res, err := e2e.RunCmdOnNode("k3s etcd-snapshot list", serverNodeNames[0])
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res).To(ContainSubstring("s3://test-bucket/test-folder/on-demand-server-0"))
+			Expect(res).To(ContainSubstring("s3://test-bucket/test-folder/special-1-server-0"))
+			Expect(res).To(ContainSubstring("s3://test-bucket/test-folder/special-2-server-0"))
+			Expect(res).To(ContainSubstring("s3://test-bucket/test-folder/special-3-server-0"))
+		})
+		It("delete first on-demand s3 snapshot", func() {
+			_, err := e2e.RunCmdOnNode("sudo k3s etcd-snapshot ls >> ./snapshotname.txt", serverNodeNames[0])
+			Expect(err).NotTo(HaveOccurred())
+			snapshotName, err := e2e.RunCmdOnNode("grep -Eo 'on-demand-server-0-([0-9]+)' ./snapshotname.txt | head -1", serverNodeNames[0])
+			Expect(err).NotTo(HaveOccurred())
+			res, err := e2e.RunCmdOnNode("sudo k3s etcd-snapshot delete "+snapshotName, serverNodeNames[0])
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res).To(ContainSubstring("Snapshot " + strings.TrimSpace(snapshotName) + " deleted"))
+		})
+		It("prunes s3 snapshots", func() {
+			_, err := e2e.RunCmdOnNode("k3s etcd-snapshot save", serverNodeNames[0])
+			Expect(err).NotTo(HaveOccurred())
+			_, err = e2e.RunCmdOnNode("k3s etcd-snapshot save", serverNodeNames[0])
+			Expect(err).NotTo(HaveOccurred())
+			res, err := e2e.RunCmdOnNode("k3s etcd-snapshot prune --snapshot-retention 2", serverNodeNames[0])
+			Expect(err).NotTo(HaveOccurred())
+			// There should now be 4 on-demand snapshots - 2 local, and 2 on s3
+			res, err = e2e.RunCmdOnNode("k3s etcd-snapshot ls 2>/dev/null | grep on-demand | wc -l", serverNodeNames[0])
+			Expect(err).NotTo(HaveOccurred())
+			Expect(strings.TrimSpace(res)).To(Equal("4"))
 		})
 	})
 })
@@ -105,9 +143,10 @@ var _ = AfterEach(func() {
 
 var _ = AfterSuite(func() {
 
-	if failed && !*ci {
-		fmt.Println("FAILED!")
-	} else {
+	if !failed {
+		Expect(e2e.GetCoverageReport(append(serverNodeNames, agentNodeNames...))).To(Succeed())
+	}
+	if !failed || *ci {
 		Expect(e2e.DestroyCluster()).To(Succeed())
 		Expect(os.Remove(kubeConfigFile)).To(Succeed())
 	}

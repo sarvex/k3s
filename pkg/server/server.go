@@ -28,21 +28,15 @@ import (
 	"github.com/k3s-io/k3s/pkg/util"
 	"github.com/k3s-io/k3s/pkg/version"
 	"github.com/pkg/errors"
-	"github.com/rancher/wrangler/pkg/apply"
-	v1 "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
-	"github.com/rancher/wrangler/pkg/leader"
-	"github.com/rancher/wrangler/pkg/resolvehome"
+	"github.com/rancher/wrangler/v3/pkg/apply"
+	v1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
+	"github.com/rancher/wrangler/v3/pkg/leader"
+	"github.com/rancher/wrangler/v3/pkg/resolvehome"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
-)
-
-const (
-	MasterRoleLabelKey       = "node-role.kubernetes.io/master"
-	ControlPlaneRoleLabelKey = "node-role.kubernetes.io/control-plane"
-	ETCDRoleLabelKey         = "node-role.kubernetes.io/etcd"
 )
 
 func ResolveDataDir(dataDir string) (string, error) {
@@ -103,7 +97,7 @@ func startOnAPIServerReady(ctx context.Context, config *Config) {
 func runControllers(ctx context.Context, config *Config) error {
 	controlConfig := &config.ControlConfig
 
-	sc, err := NewContext(ctx, controlConfig.Runtime.KubeConfigSupervisor)
+	sc, err := NewContext(ctx, config, true)
 	if err != nil {
 		return errors.Wrap(err, "failed to create new server context")
 	}
@@ -120,6 +114,7 @@ func runControllers(ctx context.Context, config *Config) error {
 		controlConfig.Runtime.NodePasswdFile); err != nil {
 		logrus.Warn(errors.Wrap(err, "error migrating node-password file"))
 	}
+	controlConfig.Runtime.K3s = sc.K3s
 	controlConfig.Runtime.Event = sc.Event
 	controlConfig.Runtime.Core = sc.Core
 
@@ -233,6 +228,7 @@ func coreControllers(ctx context.Context, sc *Context, config *Config) error {
 		helmchart.Register(ctx,
 			metav1.NamespaceAll,
 			helmcommon.Name,
+			"cluster-admin",
 			strconv.Itoa(config.ControlConfig.APIServerPort),
 			k8s,
 			apply,
@@ -247,16 +243,6 @@ func coreControllers(ctx context.Context, sc *Context, config *Config) error {
 			core.V1().ServiceAccount(),
 			core.V1().ConfigMap(),
 			core.V1().Secret())
-	}
-
-	if config.ControlConfig.EncryptSecrets {
-		if err := secretsencrypt.Register(ctx,
-			sc.K8s,
-			&config.ControlConfig,
-			sc.Core.Core().V1().Node(),
-			sc.Core.Core().V1().Secret()); err != nil {
-			return err
-		}
 	}
 
 	if config.ControlConfig.Rootless {
@@ -278,8 +264,16 @@ func stageFiles(ctx context.Context, sc *Context, controlConfig *config.Control)
 		return err
 	}
 	dataDir = filepath.Join(controlConfig.DataDir, "manifests")
+
+	dnsIPFamilyPolicy := "SingleStack"
+	if len(controlConfig.ClusterDNSs) > 1 {
+		dnsIPFamilyPolicy = "RequireDualStack"
+	}
+
 	templateVars := map[string]string{
 		"%{CLUSTER_DNS}%":                 controlConfig.ClusterDNS.String(),
+		"%{CLUSTER_DNS_LIST}%":            fmt.Sprintf("[%s]", util.JoinIPs(controlConfig.ClusterDNSs)),
+		"%{CLUSTER_DNS_IPFAMILYPOLICY}%":  dnsIPFamilyPolicy,
 		"%{CLUSTER_DOMAIN}%":              controlConfig.ClusterDomain,
 		"%{DEFAULT_LOCAL_STORAGE_PATH}%":  controlConfig.DefaultLocalStoragePath,
 		"%{SYSTEM_DEFAULT_REGISTRY}%":     registryTemplate(controlConfig.SystemDefaultRegistry),
@@ -580,10 +574,10 @@ func setNodeLabelsAndAnnotations(ctx context.Context, nodes v1.NodeClient, confi
 		if node.Labels == nil {
 			node.Labels = make(map[string]string)
 		}
-		v, ok := node.Labels[ControlPlaneRoleLabelKey]
+		v, ok := node.Labels[util.ControlPlaneRoleLabelKey]
 		if !ok || v != "true" {
-			node.Labels[ControlPlaneRoleLabelKey] = "true"
-			node.Labels[MasterRoleLabelKey] = "true"
+			node.Labels[util.ControlPlaneRoleLabelKey] = "true"
+			node.Labels[util.MasterRoleLabelKey] = "true"
 		}
 
 		if config.ControlConfig.EncryptSecrets {

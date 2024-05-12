@@ -81,9 +81,6 @@ func kubeletArgs(cfg *config.Agent) map[string]string {
 			argsMap["container-runtime-endpoint"] = socketPrefix + cfg.RuntimeSocket
 		}
 	}
-	if cfg.PauseImage != "" {
-		argsMap["pod-infra-container-image"] = cfg.PauseImage
-	}
 	if cfg.ListenAddress != "" {
 		argsMap["address"] = cfg.ListenAddress
 	}
@@ -114,7 +111,6 @@ func kubeletArgs(cfg *config.Agent) map[string]string {
 
 	if ImageCredProvAvailable(cfg) {
 		logrus.Infof("Kubelet image credential provider bin dir and configuration file found.")
-		argsMap["feature-gates"] = util.AddFeatureGate(argsMap["feature-gates"], "KubeletCredentialProviders=true")
 		argsMap["image-credential-provider-bin-dir"] = cfg.ImageCredProvBinDir
 		argsMap["image-credential-provider-config"] = cfg.ImageCredProvConfig
 	}
@@ -122,5 +118,6 @@ func kubeletArgs(cfg *config.Agent) map[string]string {
 	if cfg.ProtectKernelDefaults {
 		argsMap["protect-kernel-defaults"] = "true"
 	}
+
 	return argsMap
 }

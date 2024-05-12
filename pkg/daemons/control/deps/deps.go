@@ -30,7 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/apis/apiserver"
-	apiserverconfigv1 "k8s.io/apiserver/pkg/apis/config/v1"
+	apiserverconfigv1 "k8s.io/apiserver/pkg/apis/apiserver/v1"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/client-go/util/keyutil"
 )
@@ -42,8 +42,7 @@ const (
 	RequestHeaderCN = "system:auth-proxy"
 )
 
-var (
-	kubeconfigTemplate = template.Must(template.New("kubeconfig").Parse(`apiVersion: v1
+var kubeconfigTemplate = template.Must(template.New("kubeconfig").Parse(`apiVersion: v1
 clusters:
 - cluster:
     server: {{.URL}}
@@ -64,7 +63,6 @@ users:
     client-certificate: {{.ClientCert}}
     client-key: {{.ClientKey}}
 `))
-)
 
 func migratePassword(p *passwd.Passwd) error {
 	server, _ := p.Pass("server")
@@ -88,7 +86,8 @@ func KubeConfig(dest, url, caCert, clientCert, clientKey string) error {
 		ClientKey:  clientKey,
 	}
 
-	output, err := os.Create(dest)
+	// cis-1.24 and newer require kubeconfigs to be 0600
+	output, err := os.OpenFile(dest, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}
@@ -242,6 +241,7 @@ func genUsers(config *config.Control) error {
 		return err
 	}
 
+	// if no token is provided on bootstrap, we generate a random token
 	serverPass, err := getServerPass(passwd, config)
 	if err != nil {
 		return err
@@ -281,9 +281,7 @@ func genEncryptedNetworkInfo(controlConfig *config.Control) error {
 }
 
 func getServerPass(passwd *passwd.Passwd, config *config.Control) (string, error) {
-	var (
-		err error
-	)
+	var err error
 
 	serverPass := config.Token
 	if serverPass == "" {
@@ -452,15 +450,11 @@ func genETCDCerts(config *config.Control) error {
 		return err
 	}
 
-	altNames := &certutil.AltNames{}
-	addSANs(altNames, config.SANs)
-
-	if _, err := createClientCertKey(regen, "etcd-server", nil,
-		altNames, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
-		runtime.ETCDServerCA, runtime.ETCDServerCAKey,
-		runtime.ServerETCDCert, runtime.ServerETCDKey); err != nil {
-		return err
+	altNames := &certutil.AltNames{
+		DNSNames: []string{"kine.sock"},
 	}
+
+	addSANs(altNames, config.SANs)
 
 	if _, err := createClientCertKey(regen, "etcd-client", nil,
 		nil, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
@@ -478,6 +472,17 @@ func genETCDCerts(config *config.Control) error {
 		altNames, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		runtime.ETCDPeerCA, runtime.ETCDPeerCAKey,
 		runtime.PeerServerClientETCDCert, runtime.PeerServerClientETCDKey); err != nil {
+		return err
+	}
+
+	if config.DisableETCD {
+		return nil
+	}
+
+	if _, err := createClientCertKey(regen, "etcd-server", nil,
+		altNames, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		runtime.ETCDServerCA, runtime.ETCDServerCAKey,
+		runtime.ServerETCDCert, runtime.ServerETCDKey); err != nil {
 		return err
 	}
 
@@ -734,7 +739,7 @@ func genEncryptionConfigAndState(controlConfig *config.Control) error {
 		return nil
 	}
 
-	aescbcKey := make([]byte, aescbcKeySize, aescbcKeySize)
+	aescbcKey := make([]byte, aescbcKeySize)
 	_, err := cryptorand.Read(aescbcKey)
 	if err != nil {
 		return err
@@ -771,7 +776,7 @@ func genEncryptionConfigAndState(controlConfig *config.Control) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(runtime.EncryptionConfig, b, 0600); err != nil {
+	if err := util.AtomicWrite(runtime.EncryptionConfig, b, 0600); err != nil {
 		return err
 	}
 	encryptionConfigHash := sha256.Sum256(b)
@@ -838,5 +843,4 @@ func genCloudConfig(controlConfig *config.Control) error {
 		return err
 	}
 	return os.WriteFile(controlConfig.Runtime.CloudControllerConfig, b, 0600)
-
 }

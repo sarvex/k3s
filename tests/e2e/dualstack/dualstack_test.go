@@ -12,12 +12,13 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-// Valid nodeOS: generic/ubuntu2004, opensuse/Leap-15.3.x86_64
-var nodeOS = flag.String("nodeOS", "generic/ubuntu2004", "VM operating system")
+// Valid nodeOS: generic/ubuntu2310, opensuse/Leap-15.3.x86_64
+var nodeOS = flag.String("nodeOS", "generic/ubuntu2310", "VM operating system")
 var serverCount = flag.Int("serverCount", 3, "number of server nodes")
 var agentCount = flag.Int("agentCount", 1, "number of agent nodes")
 var hardened = flag.Bool("hardened", false, "true or false")
 var ci = flag.Bool("ci", false, "running on CI")
+var local = flag.Bool("local", false, "deploy a locally built K3s binary")
 
 func Test_E2EDualStack(t *testing.T) {
 	flag.Parse()
@@ -38,7 +39,11 @@ var _ = Describe("Verify DualStack Configuration", Ordered, func() {
 
 	It("Starts up with no issues", func() {
 		var err error
-		serverNodeNames, agentNodeNames, err = e2e.CreateCluster(*nodeOS, *serverCount, *agentCount)
+		if *local {
+			serverNodeNames, agentNodeNames, err = e2e.CreateLocalCluster(*nodeOS, *serverCount, *agentCount)
+		} else {
+			serverNodeNames, agentNodeNames, err = e2e.CreateCluster(*nodeOS, *serverCount, *agentCount)
+		}
 		Expect(err).NotTo(HaveOccurred(), e2e.GetVagrantLog(err))
 		fmt.Println("CLUSTER CONFIG")
 		fmt.Println("OS:", *nodeOS)
@@ -190,9 +195,10 @@ var _ = AfterEach(func() {
 })
 
 var _ = AfterSuite(func() {
-	if failed && !*ci {
-		fmt.Println("FAILED!")
-	} else {
+	if !failed {
+		Expect(e2e.GetCoverageReport(append(serverNodeNames, agentNodeNames...))).To(Succeed())
+	}
+	if !failed || *ci {
 		Expect(e2e.DestroyCluster()).To(Succeed())
 		Expect(os.Remove(kubeConfigFile)).To(Succeed())
 	}

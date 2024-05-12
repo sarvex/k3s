@@ -19,23 +19,20 @@ import (
 	"github.com/k3s-io/k3s/pkg/bootstrap"
 	"github.com/k3s-io/k3s/pkg/cli/cmds"
 	"github.com/k3s-io/k3s/pkg/daemons/config"
-	"github.com/k3s-io/k3s/pkg/generated/clientset/versioned/scheme"
 	"github.com/k3s-io/k3s/pkg/nodepassword"
+	"github.com/k3s-io/k3s/pkg/server/auth"
 	"github.com/k3s-io/k3s/pkg/util"
 	"github.com/k3s-io/k3s/pkg/version"
 	"github.com/pkg/errors"
 	certutil "github.com/rancher/dynamiclistener/cert"
-	coreclient "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
+	coreclient "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apiserver/pkg/authentication/user"
-	"k8s.io/apiserver/pkg/endpoints/handlers/responsewriters"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	bootstrapapi "k8s.io/cluster-bootstrap/token/api"
 	"k8s.io/kubernetes/pkg/auth/nodeidentifier"
@@ -55,7 +52,7 @@ func router(ctx context.Context, config *Config, cfg *cmds.Server) http.Handler 
 
 	prefix := "/v1-" + version.Program
 	authed := mux.NewRouter().SkipClean(true)
-	authed.Use(authMiddleware(serverConfig, version.Program+":agent", user.NodesGroup, bootstrapapi.BootstrapDefaultGroup))
+	authed.Use(auth.HasRole(serverConfig, version.Program+":agent", user.NodesGroup, bootstrapapi.BootstrapDefaultGroup))
 	authed.Path(prefix + "/serving-kubelet.crt").Handler(servingKubeletCert(serverConfig, serverConfig.Runtime.ServingKubeletKey, nodeAuth))
 	authed.Path(prefix + "/client-kubelet.crt").Handler(clientKubeletCert(serverConfig, serverConfig.Runtime.ClientKubeletKey, nodeAuth))
 	authed.Path(prefix + "/client-kube-proxy.crt").Handler(fileHandler(serverConfig.Runtime.ClientKubeProxyCert, serverConfig.Runtime.ClientKubeProxyKey))
@@ -74,22 +71,22 @@ func router(ctx context.Context, config *Config, cfg *cmds.Server) http.Handler 
 
 	nodeAuthed := mux.NewRouter().SkipClean(true)
 	nodeAuthed.NotFoundHandler = authed
-	nodeAuthed.Use(authMiddleware(serverConfig, user.NodesGroup))
+	nodeAuthed.Use(auth.HasRole(serverConfig, user.NodesGroup))
 	nodeAuthed.Path(prefix + "/connect").Handler(serverConfig.Runtime.Tunnel)
 
 	serverAuthed := mux.NewRouter().SkipClean(true)
 	serverAuthed.NotFoundHandler = nodeAuthed
-	serverAuthed.Use(authMiddleware(serverConfig, version.Program+":server"))
+	serverAuthed.Use(auth.HasRole(serverConfig, version.Program+":server"))
 	serverAuthed.Path(prefix + "/encrypt/status").Handler(encryptionStatusHandler(serverConfig))
 	serverAuthed.Path(prefix + "/encrypt/config").Handler(encryptionConfigHandler(ctx, serverConfig))
 	serverAuthed.Path(prefix + "/cert/cacerts").Handler(caCertReplaceHandler(serverConfig))
-	serverAuthed.Path("/db/info").Handler(nodeAuthed)
 	serverAuthed.Path(prefix + "/server-bootstrap").Handler(bootstrapHandler(serverConfig.Runtime))
+	serverAuthed.Path(prefix + "/token").Handler(tokenRequestHandler(ctx, serverConfig))
 
 	systemAuthed := mux.NewRouter().SkipClean(true)
 	systemAuthed.NotFoundHandler = serverAuthed
 	systemAuthed.MethodNotAllowedHandler = serverAuthed
-	systemAuthed.Use(authMiddleware(serverConfig, user.SystemPrivilegedGroup))
+	systemAuthed.Use(auth.HasRole(serverConfig, user.SystemPrivilegedGroup))
 	systemAuthed.Methods(http.MethodConnect).Handler(serverConfig.Runtime.Tunnel)
 
 	staticDir := filepath.Join(serverConfig.DataDir, "static")
@@ -107,20 +104,14 @@ func apiserver(runtime *config.ControlRuntime) http.Handler {
 		if runtime != nil && runtime.APIServer != nil {
 			runtime.APIServer.ServeHTTP(resp, req)
 		} else {
-			responsewriters.ErrorNegotiated(
-				apierrors.NewServiceUnavailable("apiserver not ready"),
-				scheme.Codecs.WithoutConversion(), schema.GroupVersion{}, resp, req,
-			)
+			util.SendError(util.ErrAPINotReady, resp, req, http.StatusServiceUnavailable)
 		}
 	})
 }
 
 func apiserverDisabled() http.Handler {
 	return http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
-		responsewriters.ErrorNegotiated(
-			apierrors.NewServiceUnavailable("apiserver disabled"),
-			scheme.Codecs.WithoutConversion(), schema.GroupVersion{}, resp, req,
-		)
+		util.SendError(util.ErrAPIDisabled, resp, req, http.StatusServiceUnavailable)
 	})
 }
 
@@ -130,10 +121,7 @@ func bootstrapHandler(runtime *config.ControlRuntime) http.Handler {
 	}
 	return http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
 		logrus.Warnf("Received HTTP bootstrap request from %s, but embedded etcd is not enabled.", req.RemoteAddr)
-		responsewriters.ErrorNegotiated(
-			apierrors.NewBadRequest("etcd disabled"),
-			scheme.Codecs.WithoutConversion(), schema.GroupVersion{}, resp, req,
-		)
+		util.SendError(errors.New("etcd disabled"), resp, req, http.StatusBadRequest)
 	})
 }
 
@@ -144,7 +132,7 @@ func cacerts(serverCA string) http.Handler {
 			var err error
 			ca, err = os.ReadFile(serverCA)
 			if err != nil {
-				sendError(err, resp, req)
+				util.SendError(err, resp, req)
 				return
 			}
 		}
@@ -219,13 +207,13 @@ func servingKubeletCert(server *config.Control, keyFile string, auth nodePassBoo
 
 		nodeName, errCode, err := auth(req)
 		if err != nil {
-			sendError(err, resp, req, errCode)
+			util.SendError(err, resp, req, errCode)
 			return
 		}
 
 		caCerts, caKey, key, err := getCACertAndKeys(server.Runtime.ServerCA, server.Runtime.ServerCAKey, server.Runtime.ServingKubeletKey)
 		if err != nil {
-			sendError(err, resp, req)
+			util.SendError(err, resp, req)
 			return
 		}
 
@@ -235,7 +223,7 @@ func servingKubeletCert(server *config.Control, keyFile string, auth nodePassBoo
 			for _, v := range strings.Split(nodeIP, ",") {
 				ip := net.ParseIP(v)
 				if ip == nil {
-					sendError(fmt.Errorf("invalid node IP address %s", ip), resp, req)
+					util.SendError(fmt.Errorf("invalid node IP address %s", ip), resp, req)
 					return
 				}
 				ips = append(ips, ip)
@@ -251,7 +239,7 @@ func servingKubeletCert(server *config.Control, keyFile string, auth nodePassBoo
 			},
 		}, key, caCerts[0], caKey)
 		if err != nil {
-			sendError(err, resp, req)
+			util.SendError(err, resp, req)
 			return
 		}
 
@@ -275,13 +263,13 @@ func clientKubeletCert(server *config.Control, keyFile string, auth nodePassBoot
 
 		nodeName, errCode, err := auth(req)
 		if err != nil {
-			sendError(err, resp, req, errCode)
+			util.SendError(err, resp, req, errCode)
 			return
 		}
 
 		caCerts, caKey, key, err := getCACertAndKeys(server.Runtime.ClientCA, server.Runtime.ClientCAKey, server.Runtime.ClientKubeletKey)
 		if err != nil {
-			sendError(err, resp, req)
+			util.SendError(err, resp, req)
 			return
 		}
 
@@ -291,7 +279,7 @@ func clientKubeletCert(server *config.Control, keyFile string, auth nodePassBoot
 			Usages:       []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 		}, key, caCerts[0], caKey)
 		if err != nil {
-			sendError(err, resp, req)
+			util.SendError(err, resp, req)
 			return
 		}
 
@@ -401,21 +389,6 @@ func serveStatic(urlPrefix, staticDir string) http.Handler {
 	return http.StripPrefix(urlPrefix, http.FileServer(http.Dir(staticDir)))
 }
 
-func sendError(err error, resp http.ResponseWriter, req *http.Request, status ...int) {
-	var code int
-	if len(status) == 1 {
-		code = status[0]
-	}
-	if code == 0 || code == http.StatusOK {
-		code = http.StatusInternalServerError
-	}
-	logrus.Errorf("Sending HTTP %d response to %s: %v", code, req.RemoteAddr, err)
-	responsewriters.ErrorNegotiated(
-		apierrors.NewGenericServerResponse(code, req.Method, schema.GroupResource{}, req.URL.Path, err.Error(), 0, true),
-		scheme.Codecs.WithoutConversion(), schema.GroupVersion{}, resp, req,
-	)
-}
-
 // nodePassBootstrapper returns a node name, or http error code and error
 type nodePassBootstrapper func(req *http.Request) (string, int, error)
 
@@ -430,8 +403,8 @@ type nodeInfo struct {
 func passwordBootstrap(ctx context.Context, config *Config) nodePassBootstrapper {
 	runtime := config.ControlConfig.Runtime
 	deferredNodes := map[string]bool{}
-	var secretClient coreclient.SecretClient
-	var nodeClient coreclient.NodeClient
+	var secretClient coreclient.SecretController
+	var nodeClient coreclient.NodeController
 	var mu sync.Mutex
 
 	return nodePassBootstrapper(func(req *http.Request) (string, int, error) {
@@ -487,6 +460,11 @@ func passwordBootstrap(ctx context.Context, config *Config) nodePassBootstrapper
 }
 
 func verifyLocalPassword(ctx context.Context, config *Config, mu *sync.Mutex, deferredNodes map[string]bool, node *nodeInfo) (string, int, error) {
+	// do not attempt to verify the node password if the local host is not running an agent and does not have a node resource.
+	if config.DisableAgent {
+		return node.Name, http.StatusOK, nil
+	}
+
 	// use same password file location that the agent creates
 	nodePasswordRoot := "/"
 	if config.ControlConfig.Rootless {
@@ -534,9 +512,9 @@ func verifyRemotePassword(ctx context.Context, config *Config, mu *sync.Mutex, d
 	return node.Name, http.StatusOK, nil
 }
 
-func verifyNode(ctx context.Context, nodeClient coreclient.NodeClient, node *nodeInfo) error {
+func verifyNode(ctx context.Context, nodeClient coreclient.NodeController, node *nodeInfo) error {
 	if nodeName, isNodeAuth := identifier.NodeIdentity(node.User); isNodeAuth {
-		if _, err := nodeClient.Get(nodeName, metav1.GetOptions{}); err != nil {
+		if _, err := nodeClient.Cache().Get(nodeName); err != nil {
 			return errors.Wrap(err, "unable to verify node identity")
 		}
 	}

@@ -13,7 +13,6 @@ import (
 
 	"github.com/k3s-io/k3s/pkg/daemons/config"
 	"github.com/k3s-io/k3s/pkg/daemons/control/proxy"
-	"github.com/k3s-io/k3s/pkg/generated/clientset/versioned/scheme"
 	"github.com/k3s-io/k3s/pkg/nodeconfig"
 	"github.com/k3s-io/k3s/pkg/util"
 	"github.com/k3s-io/k3s/pkg/version"
@@ -22,9 +21,6 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/yl2chen/cidranger"
 	v1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apiserver/pkg/endpoints/handlers/responsewriters"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/client-go/kubernetes"
 )
@@ -172,29 +168,20 @@ func (t *TunnelServer) onChangePod(podName string, pod *v1.Pod) (*v1.Pod, error)
 func (t *TunnelServer) serveConnect(resp http.ResponseWriter, req *http.Request) {
 	bconn, err := t.dialBackend(req.Context(), req.Host)
 	if err != nil {
-		responsewriters.ErrorNegotiated(
-			apierrors.NewServiceUnavailable(err.Error()),
-			scheme.Codecs.WithoutConversion(), schema.GroupVersion{}, resp, req,
-		)
+		util.SendError(err, resp, req, http.StatusBadGateway)
 		return
 	}
 
 	hijacker, ok := resp.(http.Hijacker)
 	if !ok {
-		responsewriters.ErrorNegotiated(
-			apierrors.NewInternalError(errors.New("hijacking not supported")),
-			scheme.Codecs.WithoutConversion(), schema.GroupVersion{}, resp, req,
-		)
+		util.SendError(errors.New("hijacking not supported"), resp, req, http.StatusInternalServerError)
 		return
 	}
 	resp.WriteHeader(http.StatusOK)
 
 	rconn, bufrw, err := hijacker.Hijack()
 	if err != nil {
-		responsewriters.ErrorNegotiated(
-			apierrors.NewInternalError(err),
-			scheme.Codecs.WithoutConversion(), schema.GroupVersion{}, resp, req,
-		)
+		util.SendError(err, resp, req, http.StatusInternalServerError)
 		return
 	}
 

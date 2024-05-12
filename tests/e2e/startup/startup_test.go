@@ -12,8 +12,8 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-// Valid nodeOS: generic/ubuntu2004, opensuse/Leap-15.3.x86_64
-var nodeOS = flag.String("nodeOS", "generic/ubuntu2004", "VM operating system")
+// Valid nodeOS: generic/ubuntu2310, opensuse/Leap-15.3.x86_64
+var nodeOS = flag.String("nodeOS", "generic/ubuntu2310", "VM operating system")
 var ci = flag.Bool("ci", false, "running on CI")
 var local = flag.Bool("local", false, "deploy a locally built K3s binary")
 
@@ -236,7 +236,7 @@ var _ = Describe("Various Startup Configurations", Ordered, func() {
 		})
 
 		It("Runs an interactive command a pod", func() {
-			cmd := "kubectl run busybox --rm -it --restart=Never --image=rancher/mirrored-library-busybox:1.34.1 -- uname -a"
+			cmd := "kubectl run busybox --rm -it --restart=Never --image=rancher/mirrored-library-busybox:1.36.1 -- uname -a"
 			_, err := e2e.RunCmdOnNode(cmd, serverNodeNames[0])
 			Expect(err).NotTo(HaveOccurred())
 		})
@@ -247,6 +247,39 @@ var _ = Describe("Various Startup Configurations", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 		})
 
+		It("Kills the cluster", func() {
+			err := KillK3sCluster(append(serverNodeNames, agentNodeNames...))
+			Expect(err).NotTo(HaveOccurred())
+		})
+	})
+	Context("Verify server picks up preloaded images on start", func() {
+		It("Downloads and preloads images", func() {
+			_, err := e2e.RunCmdOnNode("docker pull ranchertest/mytestcontainer:latest", serverNodeNames[0])
+			Expect(err).NotTo(HaveOccurred())
+			_, err = e2e.RunCmdOnNode("docker save ranchertest/mytestcontainer:latest -o /tmp/mytestcontainer.tar", serverNodeNames[0])
+			Expect(err).NotTo(HaveOccurred())
+			_, err = e2e.RunCmdOnNode("mkdir -p /var/lib/rancher/k3s/agent/images/", serverNodeNames[0])
+			Expect(err).NotTo(HaveOccurred())
+			_, err = e2e.RunCmdOnNode("mv /tmp/mytestcontainer.tar /var/lib/rancher/k3s/agent/images/", serverNodeNames[0])
+			Expect(err).NotTo(HaveOccurred())
+		})
+		It("Starts K3s with no issues", func() {
+			err := StartK3sCluster(append(serverNodeNames, agentNodeNames...), "", "")
+			Expect(err).NotTo(HaveOccurred(), e2e.GetVagrantLog(err))
+
+			fmt.Println("CLUSTER CONFIG")
+			fmt.Println("OS:", *nodeOS)
+			fmt.Println("Server Nodes:", serverNodeNames)
+			fmt.Println("Agent Nodes:", agentNodeNames)
+			kubeConfigFile, err = e2e.GenKubeConfigFile(serverNodeNames[0])
+			Expect(err).NotTo(HaveOccurred())
+		})
+		It("has loaded the test container image", func() {
+			Eventually(func() (string, error) {
+				cmd := "k3s crictl images | grep ranchertest/mytestcontainer"
+				return e2e.RunCmdOnNode(cmd, serverNodeNames[0])
+			}, "120s", "5s").Should(ContainSubstring("ranchertest/mytestcontainer"))
+		})
 		It("Kills the cluster", func() {
 			err := KillK3sCluster(append(serverNodeNames, agentNodeNames...))
 			Expect(err).NotTo(HaveOccurred())
@@ -277,12 +310,10 @@ var _ = AfterEach(func() {
 })
 
 var _ = AfterSuite(func() {
-	if os.Getenv("E2E_GOCOVER") != "" {
+	if !failed {
 		Expect(e2e.GetCoverageReport(append(serverNodeNames, agentNodeNames...))).To(Succeed())
 	}
-	if failed && !*ci {
-		fmt.Println("FAILED!")
-	} else {
+	if !failed || *ci {
 		Expect(e2e.DestroyCluster()).To(Succeed())
 		Expect(os.Remove(kubeConfigFile)).To(Succeed())
 	}

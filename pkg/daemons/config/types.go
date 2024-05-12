@@ -10,10 +10,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/k3s-io/k3s/pkg/util"
+	"github.com/k3s-io/k3s/pkg/generated/controllers/k3s.cattle.io"
 	"github.com/k3s-io/kine/pkg/endpoint"
-	"github.com/rancher/wrangler/pkg/generated/controllers/core"
-	"github.com/rancher/wrangler/pkg/leader"
+	"github.com/rancher/wharfie/pkg/registries"
+	"github.com/rancher/wrangler/v3/pkg/generated/controllers/core"
+	"github.com/rancher/wrangler/v3/pkg/leader"
 	utilnet "k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apiserver/pkg/authentication/authenticator"
 	"k8s.io/client-go/tools/record"
@@ -24,7 +25,6 @@ const (
 	FlannelBackendNone            = "none"
 	FlannelBackendVXLAN           = "vxlan"
 	FlannelBackendHostGW          = "host-gw"
-	FlannelBackendIPSEC           = "ipsec"
 	FlannelBackendWireguardNative = "wireguard-native"
 	FlannelBackendTailscale       = "tailscale"
 	EgressSelectorModeAgent       = "agent"
@@ -38,9 +38,10 @@ const (
 type Node struct {
 	Docker                   bool
 	ContainerRuntimeEndpoint string
+	ImageServiceEndpoint     string
 	NoFlannel                bool
 	SELinux                  bool
-	MultiClusterCIDR         bool
+	EmbeddedRegistry         bool
 	FlannelBackend           string
 	FlannelConfFile          string
 	FlannelConfOverride      bool
@@ -55,18 +56,23 @@ type Node struct {
 	Token                    string
 	Certificate              *tls.Certificate
 	ServerHTTPSPort          int
+	DefaultRuntime           string
 }
 
 type Containerd struct {
-	Address  string
-	Log      string
-	Root     string
-	State    string
-	Config   string
-	Opt      string
-	Template string
-	SELinux  bool
-	Debug    bool
+	Address       string
+	Log           string
+	Root          string
+	State         string
+	Config        string
+	Opt           string
+	Template      string
+	BlockIOConfig string
+	RDTConfig     string
+	Registry      string
+	NoDefault     bool
+	SELinux       bool
+	Debug         bool
 }
 
 type CRIDockerd struct {
@@ -117,7 +123,7 @@ type Agent struct {
 	ImageCredProvConfig     string
 	IPSECPSK                string
 	FlannelCniConfFile      string
-	PrivateRegistry         string
+	Registry                *registries.Registry
 	SystemDefaultRegistry   string
 	AirgapExtraRegistry     []string
 	DisableCCM              bool
@@ -127,6 +133,10 @@ type Agent struct {
 	DisableServiceLB        bool
 	EnableIPv4              bool
 	EnableIPv6              bool
+	VLevel                  int
+	VModule                 string
+	LogFile                 string
+	AlsoLogToStderr         bool
 }
 
 // CriticalControlArgs contains parameters that all control plane nodes in HA must share
@@ -142,7 +152,7 @@ type CriticalControlArgs struct {
 	DisableNPC            bool         `cli:"disable-network-policy"`
 	DisableServiceLB      bool         `cli:"disable-service-lb"`
 	EncryptSecrets        bool         `cli:"secrets-encryption"`
-	MultiClusterCIDR      bool         `cli:"multi-cluster-cidr"`
+	EmbeddedRegistry      bool         `cli:"embedded-registry"`
 	FlannelBackend        string       `cli:"flannel-backend"`
 	FlannelIPv6Masq       bool         `cli:"flannel-ipv6-masq"`
 	FlannelExternalIP     bool         `cli:"flannel-external-ip"`
@@ -169,8 +179,10 @@ type Control struct {
 	KubeConfigMode           string
 	HelmJobImage             string
 	DataDir                  string
+	KineTLS                  bool
 	Datastore                endpoint.Config `json:"-"`
 	Disables                 map[string]bool
+	DisableAgent             bool
 	DisableAPIServer         bool
 	DisableControllerManager bool
 	DisableETCD              bool
@@ -218,9 +230,12 @@ type Control struct {
 	EtcdS3Timeout            time.Duration `json:"-"`
 	EtcdS3Insecure           bool          `json:"-"`
 	ServerNodeName           string
+	VLevel                   int
+	VModule                  string
 
 	BindAddress string
 	SANs        []string
+	SANSecurity bool
 	PrivateIP   string
 	Runtime     *ControlRuntime `json:"-"`
 }
@@ -250,7 +265,7 @@ func (c *Control) BindAddressOrLoopback(chooseHostInterface, urlSafe bool) strin
 // service CIDRs indicate an IPv4/Dual-Stack or IPv6 only cluster. If the urlSafe
 // parameter is true, IPv6 addresses are enclosed in square brackets, as per RFC2732.
 func (c *Control) Loopback(urlSafe bool) string {
-	if IPv6OnlyService, _ := util.IsIPv6OnlyCIDRs(c.ServiceIPRanges); IPv6OnlyService {
+	if utilsnet.IsIPv6CIDR(c.ServiceIPRange) {
 		if urlSafe {
 			return "[::1]"
 		}
@@ -282,7 +297,7 @@ type ControlRuntime struct {
 
 	HTTPBootstrap                        bool
 	APIServerReady                       <-chan struct{}
-	AgentReady                           <-chan struct{}
+	ContainerRuntimeReady                <-chan struct{}
 	ETCDReady                            <-chan struct{}
 	StartupHooksWg                       *sync.WaitGroup
 	ClusterControllerStarts              map[string]leader.Callback
@@ -342,14 +357,15 @@ type ControlRuntime struct {
 	ClientETCDCert           string
 	ClientETCDKey            string
 
+	K3s        *k3s.Factory
 	Core       *core.Factory
 	Event      record.EventRecorder
 	EtcdConfig endpoint.ETCDConfig
 }
 
-func NewRuntime(agentReady <-chan struct{}) *ControlRuntime {
+func NewRuntime(containerRuntimeReady <-chan struct{}) *ControlRuntime {
 	return &ControlRuntime{
-		AgentReady:                           agentReady,
+		ContainerRuntimeReady:                containerRuntimeReady,
 		ClusterControllerStarts:              map[string]leader.Callback{},
 		LeaderElectedClusterControllerStarts: map[string]leader.Callback{},
 	}

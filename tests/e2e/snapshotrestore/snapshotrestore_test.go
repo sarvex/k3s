@@ -14,10 +14,10 @@ import (
 )
 
 // Valid nodeOS:
-// generic/ubuntu2004, generic/centos7, generic/rocky8,
+// generic/ubuntu2310, generic/centos7, generic/rocky8,
 // opensuse/Leap-15.3.x86_64
 
-var nodeOS = flag.String("nodeOS", "generic/ubuntu2004", "VM operating system")
+var nodeOS = flag.String("nodeOS", "generic/ubuntu2310", "VM operating system")
 var serverCount = flag.Int("serverCount", 3, "number of server nodes")
 var agentCount = flag.Int("agentCount", 1, "number of agent nodes")
 var hardened = flag.Bool("hardened", false, "true or false")
@@ -25,7 +25,6 @@ var ci = flag.Bool("ci", false, "running on CI")
 var local = flag.Bool("local", false, "deploy a locally built K3s binary")
 
 // Environment Variables Info:
-// E2E_EXTERNAL_DB: mysql, postgres, etcd (default: etcd)
 // E2E_RELEASE_VERSION=v1.23.1+k3s2 (default: latest commit from master)
 
 func Test_E2ESnapshotRestore(t *testing.T) {
@@ -125,6 +124,7 @@ var _ = Describe("Verify snapshots and cluster restores work", Ordered, func() {
 		})
 
 	})
+
 	Context("Cluster is reset normally", func() {
 		It("Resets the cluster", func() {
 			for _, nodeName := range serverNodeNames {
@@ -143,6 +143,17 @@ var _ = Describe("Verify snapshots and cluster restores work", Ordered, func() {
 
 			cmd = "systemctl start k3s"
 			Expect(e2e.RunCmdOnNode(cmd, serverNodeNames[0])).Error().NotTo(HaveOccurred())
+		})
+
+		It("Resets non bootstrap nodes", func() {
+			for _, nodeName := range serverNodeNames {
+				if nodeName != serverNodeNames[0] {
+					cmd := "k3s server --cluster-reset"
+					response, err := e2e.RunCmdOnNode(cmd, nodeName)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(response).Should(ContainSubstring("Managed etcd cluster membership has been reset, restart without --cluster-reset flag now"))
+				}
+			}
 		})
 
 		It("Checks that other servers are not ready", func() {
@@ -210,6 +221,7 @@ var _ = Describe("Verify snapshots and cluster restores work", Ordered, func() {
 		})
 
 	})
+
 	Context("Cluster restores from snapshot", func() {
 		It("Restores the snapshot", func() {
 			//Stop k3s on all nodes
@@ -305,9 +317,10 @@ var _ = AfterEach(func() {
 })
 
 var _ = AfterSuite(func() {
-	if failed && !*ci {
-		fmt.Println("FAILED!")
-	} else {
+	if !failed {
+		Expect(e2e.GetCoverageReport(append(serverNodeNames, agentNodeNames...))).To(Succeed())
+	}
+	if !failed || *ci {
 		Expect(e2e.DestroyCluster()).To(Succeed())
 		Expect(os.Remove(kubeConfigFile)).To(Succeed())
 	}
