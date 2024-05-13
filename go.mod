@@ -80,7 +80,7 @@ require (
 	github.com/blang/semver/v4 v4.0.0
 	github.com/cloudnativelabs/kube-router/v2 v2.0.0-00010101000000-000000000000
 	github.com/containerd/aufs v1.0.0
-	github.com/containerd/cgroups/v3 v3.0.2
+	github.com/containerd/cgroups/v3 v3.0.3
 	github.com/containerd/containerd v1.7.16
 	github.com/containerd/fuse-overlayfs-snapshotter v1.0.8
 	github.com/containerd/stargz-snapshotter v0.15.1
@@ -194,7 +194,7 @@ require (
 	github.com/chai2010/gettext-go v1.0.2 // indirect
 	github.com/checkpoint-restore/go-criu/v5 v5.3.0 // indirect
 	github.com/chenzhuoyu/base64x v0.0.0-20221115062448-fe3a3abad311 // indirect
-	github.com/cilium/ebpf v0.9.1 // indirect
+	github.com/cilium/ebpf v0.11.0 // indirect
 	github.com/container-storage-interface/spec v1.8.0 // indirect
 	github.com/containerd/btrfs/v2 v2.0.0 // indirect
 	github.com/containerd/cgroups v1.1.0 // indirect
