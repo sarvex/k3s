@@ -88,7 +88,7 @@ require (
 	github.com/coreos/go-iptables v0.7.0
 	github.com/coreos/go-systemd/v22 v22.5.0
 	github.com/docker/docker v25.0.5+incompatible
-	github.com/erikdubbelboer/gspt v0.0.0-20190125194910-e68493906b83
+	github.com/erikdubbelboer/gspt v0.0.0-20210805194459-ce36a5128377
 	github.com/flannel-io/flannel v0.24.2
 	github.com/go-bindata/go-bindata v3.1.2+incompatible
 	github.com/go-logr/logr v1.4.1
