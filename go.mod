@@ -23,7 +23,7 @@ replace (
 	github.com/ugorji/go => github.com/ugorji/go v1.2.11
 	go.etcd.io/etcd/api/v3 => github.com/k3s-io/etcd/api/v3 v3.5.9-k3s1
 	go.etcd.io/etcd/client/pkg/v3 => github.com/k3s-io/etcd/client/pkg/v3 v3.5.9-k3s1
-	go.etcd.io/etcd/client/v2 => github.com/k3s-io/etcd/client/v2 v2.305.9-k3s1
+	go.etcd.io/etcd/client/v2 => github.com/k3s-io/etcd/client/v2 v2.305.13
 	go.etcd.io/etcd/client/v3 => github.com/k3s-io/etcd/client/v3 v3.5.9-k3s1
 	go.etcd.io/etcd/etcdutl/v3 => github.com/k3s-io/etcd/etcdutl/v3 v3.5.9-k3s1
 	go.etcd.io/etcd/pkg/v3 => github.com/k3s-io/etcd/pkg/v3 v3.5.9-k3s1
@@ -135,8 +135,8 @@ require (
 	github.com/urfave/cli v1.22.14
 	github.com/vishvananda/netlink v1.2.1-beta.2
 	github.com/yl2chen/cidranger v1.0.2
-	go.etcd.io/etcd/api/v3 v3.5.10
-	go.etcd.io/etcd/client/pkg/v3 v3.5.10
+	go.etcd.io/etcd/api/v3 v3.5.13
+	go.etcd.io/etcd/client/pkg/v3 v3.5.13
 	go.etcd.io/etcd/client/v3 v3.5.10
 	go.etcd.io/etcd/etcdutl/v3 v3.5.9
 	go.etcd.io/etcd/server/v3 v3.5.10
