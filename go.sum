@@ -950,6 +950,8 @@ github.com/k3s-io/etcd/client/v3 v3.5.9-k3s1 h1:Knr/8l7Sx92zUyevYO0gIO5P6EEc6ztv
 github.com/k3s-io/etcd/client/v3 v3.5.9-k3s1/go.mod h1:i/Eo5LrZ5IKqpbtpPDuaUnDOUv471oDg8cjQaUr2MbA=
 github.com/k3s-io/etcd/etcdutl/v3 v3.5.9-k3s1 h1:IkCP2oKkQwyu+ad4FuToJu9SOuEVQZwCpjXj6SJqwvs=
 github.com/k3s-io/etcd/etcdutl/v3 v3.5.9-k3s1/go.mod h1:rQ6z0HAAxVgYwBTWJbs3ei8gMYiNQzF51lQ2kI+6LZU=
+github.com/k3s-io/etcd/etcdutl/v3 v3.5.13 h1:oRZCy2lVIygUr4U1tIXlBD7vpbU/WsG1L1XmOtE7nQY=
+github.com/k3s-io/etcd/etcdutl/v3 v3.5.13/go.mod h1:2vhvTIQobP+Cb04qzlcbKGvX6J5oq/N1kquk1yCDIQY=
 github.com/k3s-io/etcd/pkg/v3 v3.5.9-k3s1 h1:au8ekw/8/wNokQ5dHB7MEdStKMCNBNm4tDsPWEMqW4Y=
 github.com/k3s-io/etcd/pkg/v3 v3.5.9-k3s1/go.mod h1:BZl0SAShQFk0IpLWR78T/+pyt8AruMHhTNNX73hkNVY=
 github.com/k3s-io/etcd/raft/v3 v3.5.9-k3s1 h1:nlix2+EM1UDofoHgp/X2VHzMvJW7oYbZbEinblZusNc=
